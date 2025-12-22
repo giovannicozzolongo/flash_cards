@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+beeware-venv/
+.eggs/
+
+# BeeWare build
+build/
+dist/
+logs/
+
+# Model e dati utente (opzionale, vedi sotto)
+*.pth
+deck_save.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
