@@ -70,17 +70,14 @@ class PurePythonTensor:
                 self.data = np.array(data, dtype=np.float32)
             self.shape = self.data.shape
         else:
-            # Pure Python: flatten and store shape
             if isinstance(data, list):
                 if shape:
                     self.shape = tuple(shape)
                     self.data = self._flatten(data)
                 elif data and isinstance(data[0], list):
-                    # 2D list
                     self.shape = (len(data), len(data[0]))
                     self.data = self._flatten(data)
                 else:
-                    # 1D list
                     self.shape = (len(data),)
                     self.data = [float(x) for x in data]
             else:
@@ -88,7 +85,6 @@ class PurePythonTensor:
                 self.data = [float(data)]
     
     def _flatten(self, lst):
-        """Flatten nested list."""
         result = []
         for item in lst:
             if isinstance(item, list):
@@ -108,7 +104,6 @@ class PurePythonTensor:
                 i, j = idx
                 return self.data[i * cols + j]
             else:
-                # Return row
                 start = idx * cols
                 return self.data[start:start + cols]
         return self.data[idx]
@@ -141,7 +136,6 @@ class PurePythonTensor:
 
 
 def tensor_zeros(shape):
-    """Create zero tensor."""
     if NUMPY_AVAILABLE:
         return PurePythonTensor(np.zeros(shape, dtype=np.float32))
     if isinstance(shape, int):
@@ -153,7 +147,6 @@ def tensor_zeros(shape):
 
 
 def tensor_randn(shape, scale=1.0):
-    """Create tensor with random normal values."""
     if NUMPY_AVAILABLE:
         return PurePythonTensor(np.random.randn(*shape).astype(np.float32) * scale)
     
@@ -163,7 +156,6 @@ def tensor_randn(shape, scale=1.0):
     for s in shape:
         total *= s
     
-    # Box-Muller transform for normal distribution
     data = []
     for _ in range((total + 1) // 2):
         u1 = random.random()
@@ -178,14 +170,11 @@ def tensor_randn(shape, scale=1.0):
 
 
 def matmul(a, b):
-    """Matrix multiplication: a @ b"""
     if NUMPY_AVAILABLE:
         result = np.dot(a.data, b.data)
         return PurePythonTensor(result)
     
-    # Pure Python matmul
     if len(a.shape) == 1 and len(b.shape) == 2:
-        # Vector @ Matrix: (n,) @ (n, m) -> (m,)
         n, m = b.shape
         result = [0.0] * m
         for j in range(m):
@@ -194,11 +183,9 @@ def matmul(a, b):
         return PurePythonTensor(result, (m,))
     
     elif len(a.shape) == 2 and len(b.shape) == 2:
-        # Matrix @ Matrix: (p, n) @ (n, m) -> (p, m)
         p, n = a.shape
         n2, m = b.shape
-        assert n == n2, f"Shape mismatch: {a.shape} @ {b.shape}"
-        
+        assert n == n2
         result = [0.0] * (p * m)
         for i in range(p):
             for j in range(m):
@@ -209,10 +196,8 @@ def matmul(a, b):
         return PurePythonTensor(result, (p, m))
     
     elif len(a.shape) == 2 and len(b.shape) == 1:
-        # Matrix @ Vector: (p, n) @ (n,) -> (p,)
         p, n = a.shape
-        assert n == b.shape[0], f"Shape mismatch: {a.shape} @ {b.shape}"
-        
+        assert n == b.shape[0]
         result = [0.0] * p
         for i in range(p):
             s = 0.0
@@ -225,12 +210,10 @@ def matmul(a, b):
 
 
 def tensor_add(a, b):
-    """Element-wise addition."""
     if NUMPY_AVAILABLE:
         return PurePythonTensor(a.data + b.data)
     
     if a.shape != b.shape:
-        # Broadcasting for bias addition
         if len(b.shape) == 1 and len(a.shape) == 2:
             rows, cols = a.shape
             result = list(a.data)
@@ -245,104 +228,48 @@ def tensor_add(a, b):
     return PurePythonTensor(result, a.shape)
 
 
-def tensor_sub(a, b):
-    """Element-wise subtraction."""
-    if NUMPY_AVAILABLE:
-        return PurePythonTensor(a.data - b.data)
-    result = [a.data[i] - b.data[i] for i in range(len(a.data))]
-    return PurePythonTensor(result, a.shape)
-
-
-def tensor_mul(a, b):
-    """Element-wise multiplication."""
-    if NUMPY_AVAILABLE:
-        if isinstance(b, (int, float)):
-            return PurePythonTensor(a.data * b)
-        return PurePythonTensor(a.data * b.data)
-    
-    if isinstance(b, (int, float)):
-        result = [x * b for x in a.data]
-    else:
-        result = [a.data[i] * b.data[i] for i in range(len(a.data))]
-    return PurePythonTensor(result, a.shape)
-
-
-def tensor_sum(a):
-    """Sum all elements."""
-    if NUMPY_AVAILABLE:
-        return float(np.sum(a.data))
-    return sum(a.data)
-
-
-def tensor_mean(a):
-    """Mean of all elements."""
-    if NUMPY_AVAILABLE:
-        return float(np.mean(a.data))
-    return sum(a.data) / len(a.data)
-
-
 class LinearLayer:
-    """Fully connected layer."""
-    
     def __init__(self, in_features, out_features):
         self.in_features = in_features
         self.out_features = out_features
-        
-        # Xavier initialization
         scale = math.sqrt(2.0 / (in_features + out_features))
         self.weight = tensor_randn((in_features, out_features), scale)
         self.bias = tensor_zeros(out_features)
-        
-        # Gradients
         self.weight_grad = tensor_zeros((in_features, out_features))
         self.bias_grad = tensor_zeros(out_features)
-        
-        # Cache for backprop
         self.input_cache = None
     
     def forward(self, x):
-        """Forward pass: y = x @ W + b"""
         self.input_cache = x
         out = matmul(x, self.weight)
         out = tensor_add(out, self.bias)
         return out
     
     def backward(self, grad_output):
-        """Backward pass."""
-        # grad_output shape: (batch, out_features) or (out_features,)
         x = self.input_cache
-        
         if NUMPY_AVAILABLE:
             if len(x.shape) == 1:
-                # Single sample
                 self.weight_grad.data += np.outer(x.data, grad_output.data)
                 self.bias_grad.data += grad_output.data
                 grad_input = PurePythonTensor(grad_output.data @ self.weight.data.T)
             else:
-                # Batch
                 self.weight_grad.data += x.data.T @ grad_output.data
                 self.bias_grad.data += np.sum(grad_output.data, axis=0)
                 grad_input = PurePythonTensor(grad_output.data @ self.weight.data.T)
         else:
-            # Pure Python
             if len(x.shape) == 1:
-                # Single sample: outer product
                 for i in range(self.in_features):
                     for j in range(self.out_features):
                         idx = i * self.out_features + j
                         self.weight_grad.data[idx] += x.data[i] * grad_output.data[j]
-                
                 for j in range(self.out_features):
                     self.bias_grad.data[j] += grad_output.data[j]
-                
-                # grad_input = grad_output @ W.T
                 grad_input_data = [0.0] * self.in_features
                 for i in range(self.in_features):
                     for j in range(self.out_features):
                         grad_input_data[i] += grad_output.data[j] * self.weight.data[i * self.out_features + j]
                 grad_input = PurePythonTensor(grad_input_data, (self.in_features,))
             else:
-                # Batch
                 batch_size = x.shape[0]
                 for b in range(batch_size):
                     for i in range(self.in_features):
@@ -351,13 +278,10 @@ class LinearLayer:
                             x_idx = b * self.in_features + i
                             g_idx = b * self.out_features + j
                             self.weight_grad.data[idx] += x.data[x_idx] * grad_output.data[g_idx]
-                    
                 for b in range(batch_size):
                     for j in range(self.out_features):
                         g_idx = b * self.out_features + j
                         self.bias_grad.data[j] += grad_output.data[g_idx]
-                
-                # grad_input
                 grad_input_data = [0.0] * (batch_size * self.in_features)
                 for b in range(batch_size):
                     for i in range(self.in_features):
@@ -367,7 +291,6 @@ class LinearLayer:
                             s += grad_output.data[g_idx] * self.weight.data[i * self.out_features + j]
                         grad_input_data[b * self.in_features + i] = s
                 grad_input = PurePythonTensor(grad_input_data, (batch_size, self.in_features))
-        
         return grad_input
     
     def zero_grad(self):
@@ -376,8 +299,6 @@ class LinearLayer:
 
 
 class ReLU:
-    """ReLU activation."""
-    
     def __init__(self):
         self.mask = None
     
@@ -399,27 +320,23 @@ class ReLU:
 
 
 class Sigmoid:
-    """Sigmoid activation."""
-    
     def __init__(self):
         self.output = None
     
     def forward(self, x):
         if NUMPY_AVAILABLE:
-            # Clip for numerical stability
             clipped = np.clip(x.data, -500, 500)
             self.output = 1.0 / (1.0 + np.exp(-clipped))
             return PurePythonTensor(self.output)
         else:
             result = []
             for v in x.data:
-                v = max(-500, min(500, v))  # Clip
+                v = max(-500, min(500, v))
                 result.append(1.0 / (1.0 + math.exp(-v)))
             self.output = result
             return PurePythonTensor(result, x.shape)
     
     def backward(self, grad_output):
-        # sigmoid' = sigmoid * (1 - sigmoid)
         if NUMPY_AVAILABLE:
             grad = self.output * (1 - self.output)
             return PurePythonTensor(grad_output.data * grad)
@@ -430,8 +347,6 @@ class Sigmoid:
 
 
 class Dropout:
-    """Dropout layer."""
-    
     def __init__(self, p=0.2):
         self.p = p
         self.mask = None
@@ -440,7 +355,6 @@ class Dropout:
     def forward(self, x):
         if not self.training or self.p == 0:
             return x
-        
         if NUMPY_AVAILABLE:
             self.mask = (np.random.rand(*x.shape) > self.p).astype(np.float32)
             scale = 1.0 / (1.0 - self.p)
@@ -454,7 +368,6 @@ class Dropout:
     def backward(self, grad_output):
         if not self.training or self.p == 0:
             return grad_output
-        
         scale = 1.0 / (1.0 - self.p)
         if NUMPY_AVAILABLE:
             return PurePythonTensor(grad_output.data * self.mask * scale)
@@ -464,8 +377,6 @@ class Dropout:
 
 
 class AdamOptimizer:
-    """Adam optimizer."""
-    
     def __init__(self, layers, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
         self.layers = [l for l in layers if isinstance(l, LinearLayer)]
         self.lr = lr
@@ -473,13 +384,10 @@ class AdamOptimizer:
         self.beta2 = beta2
         self.eps = eps
         self.t = 0
-        
-        # Initialize moment estimates
         self.m_w = []
         self.v_w = []
         self.m_b = []
         self.v_b = []
-        
         for layer in self.layers:
             self.m_w.append(tensor_zeros(layer.weight.shape))
             self.v_w.append(tensor_zeros(layer.weight.shape))
@@ -488,43 +396,23 @@ class AdamOptimizer:
     
     def step(self):
         self.t += 1
-        
         for i, layer in enumerate(self.layers):
-            # Update weights
-            self._update_param(
-                layer.weight, layer.weight_grad,
-                self.m_w[i], self.v_w[i]
-            )
-            
-            # Update biases
-            self._update_param(
-                layer.bias, layer.bias_grad,
-                self.m_b[i], self.v_b[i]
-            )
+            self._update_param(layer.weight, layer.weight_grad, self.m_w[i], self.v_w[i])
+            self._update_param(layer.bias, layer.bias_grad, self.m_b[i], self.v_b[i])
     
     def _update_param(self, param, grad, m, v):
         if NUMPY_AVAILABLE:
-            # Update biased moments
             m.data = self.beta1 * m.data + (1 - self.beta1) * grad.data
             v.data = self.beta2 * v.data + (1 - self.beta2) * (grad.data ** 2)
-            
-            # Bias correction
             m_hat = m.data / (1 - self.beta1 ** self.t)
             v_hat = v.data / (1 - self.beta2 ** self.t)
-            
-            # Update parameters
             param.data -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
         else:
             for j in range(len(param.data)):
-                # Update biased moments
                 m.data[j] = self.beta1 * m.data[j] + (1 - self.beta1) * grad.data[j]
                 v.data[j] = self.beta2 * v.data[j] + (1 - self.beta2) * (grad.data[j] ** 2)
-                
-                # Bias correction
                 m_hat = m.data[j] / (1 - self.beta1 ** self.t)
                 v_hat = v.data[j] / (1 - self.beta2 ** self.t)
-                
-                # Update parameters
                 param.data[j] -= self.lr * m_hat / (math.sqrt(v_hat) + self.eps)
     
     def zero_grad(self):
@@ -533,45 +421,34 @@ class AdamOptimizer:
 
 
 class WordPriorityNetwork:
-    """Neural network for word priority prediction."""
-    
     def __init__(self, input_dim=41):
         self.input_dim = input_dim
-        
-        # Build layers: 41 -> 64 -> 32 -> 16 -> 1
         self.fc1 = LinearLayer(input_dim, 64)
         self.relu1 = ReLU()
         self.drop1 = Dropout(0.2)
-        
         self.fc2 = LinearLayer(64, 32)
         self.relu2 = ReLU()
         self.drop2 = Dropout(0.2)
-        
         self.fc3 = LinearLayer(32, 16)
         self.relu3 = ReLU()
-        
         self.fc4 = LinearLayer(16, 1)
         self.sigmoid = Sigmoid()
-        
         self.layers = [
             self.fc1, self.relu1, self.drop1,
             self.fc2, self.relu2, self.drop2,
             self.fc3, self.relu3,
             self.fc4, self.sigmoid
         ]
-        
         self.training_count = 0
         self.total_loss = 0.0
     
     def forward(self, x):
-        """Forward pass through the network."""
         out = x
         for layer in self.layers:
             out = layer.forward(out)
         return out
     
     def backward(self, grad):
-        """Backward pass through the network."""
         for layer in reversed(self.layers):
             if hasattr(layer, 'backward'):
                 grad = layer.backward(grad)
@@ -588,30 +465,17 @@ class WordPriorityNetwork:
                 layer.training = False
     
     def get_state(self):
-        """Get model state for saving."""
-        state = {
-            'training_count': self.training_count,
-            'total_loss': self.total_loss,
-            'layers': []
-        }
-        
+        state = {'training_count': self.training_count, 'total_loss': self.total_loss, 'layers': []}
         for layer in self.layers:
             if isinstance(layer, LinearLayer):
-                state['layers'].append({
-                    'weight': layer.weight.tolist(),
-                    'bias': layer.bias.tolist()
-                })
-        
+                state['layers'].append({'weight': layer.weight.tolist(), 'bias': layer.bias.tolist()})
         return state
     
     def load_state(self, state):
-        """Load model state."""
         self.training_count = state.get('training_count', 0)
         self.total_loss = state.get('total_loss', 0.0)
-        
         layer_states = state.get('layers', [])
         linear_layers = [l for l in self.layers if isinstance(l, LinearLayer)]
-        
         for layer, layer_state in zip(linear_layers, layer_states):
             layer.weight = PurePythonTensor(layer_state['weight'])
             layer.bias = PurePythonTensor(layer_state['bias'])
@@ -620,25 +484,21 @@ class WordPriorityNetwork:
 # =============================================================================
 # APP INFO
 # =============================================================================
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 APP_AUTHOR = "Giovanni Cozzolongo"
 
 INFO_TEXT = {
-    "italian": f"""Parolino ti aiuta a memorizzare vocaboli italiano e tedesco con le flashcard. Nella scheda ABC cerchi le parole e con un doppio click le aggiungi al tuo mazzo, la stella indica che la parola è già nel mazzo. Nella scheda Flashcards studi le carte e premi più se hai indovinato o meno se hai sbagliato, così l'app impara dai tuoi errori e ti ripropone più spesso le parole difficili. Il numero nel campo di testo limita quante carte pescare e il bottone con le frecce genera un nuovo mazzo.
+    "italian": f"""Parolino ti aiuta a memorizzare vocaboli italiano e tedesco con le flashcard. Nella scheda ABC cerchi le parole e con un doppio click le aggiungi al tuo mazzo, la stella indica che la parola è già nel mazzo. Nella scheda Flashcards studi le carte e premi più se hai indovinato o meno se hai sbagliato, così l'app impara dai tuoi errori e ti ripropone più spesso le parole difficili.
 
 Parolino v{APP_VERSION}
 © 2025 {APP_AUTHOR}""",
 
-    "german": f"""Parolino hilft dir, italienische und deutsche Vokabeln mit Karteikarten zu lernen. Im ABC Tab suchst du Wörter und fügst sie mit Doppelklick zu deinem Stapel hinzu, der Stern zeigt an, dass das Wort schon im Stapel ist. Im Flashcards Tab lernst du die Karten und drückst Plus, wenn du es wusstest, oder Minus, wenn nicht, so lernt die App aus deinen Fehlern und zeigt dir schwierige Wörter öfter. Die Zahl im Textfeld begrenzt, wie viele Karten gezogen werden, und der Knopf mit den Pfeilen erzeugt einen neuen Stapel.
+    "german": f"""Parolino hilft dir, italienische und deutsche Vokabeln mit Karteikarten zu lernen. Im ABC Tab suchst du Wörter und fügst sie mit Doppelklick zu deinem Stapel hinzu. Im Flashcards Tab lernst du die Karten und drückst Plus wenn du es wusstest oder Minus wenn nicht.
 
 Parolino v{APP_VERSION}
 © 2025 {APP_AUTHOR}"""
 }
 
-
-# =============================================================================
-# TRANSLATIONS
-# =============================================================================
 TRANSLATIONS = {
     "italian": {
         "search_placeholder": "Cerca parole...",
@@ -662,27 +522,21 @@ def extract_gender(word_raw):
     match = re.search(r'\{([mfn]|pl)\}', word_raw)
     return match.group(1) if match else None
 
-
 def clean_word_for_display(word_raw):
     word = re.sub(r'\s*\{[^}]*\}', '', word_raw)
     word = re.sub(r'\s*\[[^\]]*\]', '', word)
     return word.strip()
 
-
 def extract_base_word(word_raw):
     bracket_pos = word_raw.find('[')
     return word_raw[:bracket_pos].strip() if bracket_pos > 0 else word_raw
-
 
 def normalize_for_search(word):
     word = re.sub(r'[!?.,:;]+$', '', word)
     return word.strip().lower()
 
-
 def is_proper_noun(word, translation):
-    w1 = word.lower()
-    w2 = translation.lower()
-    
+    w1, w2 = word.lower(), translation.lower()
     if len(w1) >= 3 and len(w2) >= 3:
         common_start = 0
         for i in range(min(len(w1), len(w2))):
@@ -692,34 +546,23 @@ def is_proper_noun(word, translation):
                 break
         if common_start >= 3 and common_start >= min(len(w1), len(w2)) * 0.5:
             return True
-    
-    common_names = {
-        'giovanni', 'giuseppe', 'maria', 'anna', 'paolo', 'pietro', 'francesco',
-        'johannes', 'josef', 'paul', 'peter', 'franz', 'marco', 'luca', 'matteo',
-        'andrea', 'carlo', 'luigi', 'antonio', 'markus', 'lukas', 'matthias',
-        'andreas', 'karl', 'ludwig', 'anton'
-    }
-    
+    common_names = {'giovanni', 'giuseppe', 'maria', 'anna', 'paolo', 'pietro', 'francesco',
+                   'johannes', 'josef', 'paul', 'peter', 'franz', 'marco', 'luca', 'matteo',
+                   'andrea', 'carlo', 'luigi', 'antonio', 'markus', 'lukas', 'matthias'}
     return w1 in common_names or w2 in common_names
-
 
 def add_german_article(word, gender, word_type, original_word=None, translation=None):
     if word_type != 'noun' or not gender:
         return word
-    
-    if original_word and translation:
-        if is_proper_noun(original_word, translation):
-            return word
-    
+    if original_word and translation and is_proper_noun(original_word, translation):
+        return word
     articles = {'m': 'der', 'f': 'die', 'n': 'das', 'pl': 'die'}
     article = articles.get(gender)
     return f"{article} {word}" if article else word
 
-
 def load_dictionary(filepath):
     dictionary = []
     seen = set()
-    
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
@@ -727,65 +570,50 @@ def load_dictionary(filepath):
                     continue
                 if line.startswith('ITALIANO') or line.startswith('TEDESCO'):
                     continue
-                
                 parts = line.strip().split('\t')
                 if len(parts) < 2:
                     continue
-                
                 word1_raw, word2_raw = parts[0].strip(), parts[1].strip()
                 word_type = parts[2].strip() if len(parts) > 2 else ""
                 categories = parts[3].strip() if len(parts) > 3 else ""
-                
                 if not word1_raw or not word2_raw:
                     continue
-                
                 word1_base = extract_base_word(word1_raw)
                 gender = extract_gender(word1_base)
                 word1_display = clean_word_for_display(word1_base)
                 word1_search = normalize_for_search(word1_display)
-                
                 if not word1_search or ' ' in word1_search or len(word1_search) > 30:
                     continue
                 if word1_display.lower() in seen:
                     continue
-                
                 seen.add(word1_display.lower())
-                
                 word2_main = word2_raw.split(' / ')[0].strip() if ' / ' in word2_raw else word2_raw
                 gender2 = extract_gender(word2_main)
                 word2_display = clean_word_for_display(word2_main)
-                
                 entry_type = "general"
                 wt_lower = word_type.lower()
                 if "noun" in wt_lower: entry_type = "noun"
                 elif "verb" in wt_lower: entry_type = "verb"
                 elif "adj" in wt_lower: entry_type = "adjective"
                 elif "adv" in wt_lower: entry_type = "adverb"
-                
                 topic = "general"
                 cat_lower = categories.lower()
                 if "[gastr.]" in cat_lower: topic = "food"
                 elif "[bot.]" in cat_lower or "[zool.]" in cat_lower: topic = "nature"
                 elif "[med.]" in cat_lower: topic = "health"
                 elif "[sport" in cat_lower: topic = "sports"
-                
                 dictionary.append({
-                    "word_display": word1_display,
-                    "word_search": word1_search,
-                    "translation": word2_display,
-                    "gender": gender,
-                    "gender2": gender2,
-                    "type": entry_type,
-                    "topic": topic
+                    "word_display": word1_display, "word_search": word1_search,
+                    "translation": word2_display, "gender": gender, "gender2": gender2,
+                    "type": entry_type, "topic": topic
                 })
     except Exception as e:
         print(f"Error loading {filepath}: {e}")
-    
     return dictionary
 
 
 # =============================================================================
-# FEATURE EXTRACTION (41 features)
+# FEATURE EXTRACTION
 # =============================================================================
 class WordFeatureExtractor:
     TOPICS = ["general", "food", "nature", "health", "sports", "work", "science", "music", "religion"]
@@ -796,25 +624,17 @@ class WordFeatureExtractor:
     def extract(word, translation, word_type, topic, gender, gender2, score, lang,
                 times_seen=0, days_since_last=0, recent_history=None):
         f = []
-        
-        # === Continuous features (7) ===
         f.append(min(len(word) / 20.0, 1.0))
         f.append(min(len(translation) / 20.0, 1.0))
         vowels = len(re.findall(r'[aeiouäöüAEIOUÄÖÜ]', word))
         f.append(min(vowels / 8.0, 1.0))
-        
-        # Temporal features (crucial for spaced repetition)
         f.append(min(times_seen / 20.0, 1.0))
-        f.append(min(days_since_last / 30.0, 1.0))  # normalize to ~1 month
-        
-        # Recent accuracy
+        f.append(min(days_since_last / 30.0, 1.0))
         if recent_history and len(recent_history) > 0:
             recent_acc = sum(recent_history) / len(recent_history)
         else:
-            recent_acc = 0.5  # neutral
+            recent_acc = 0.5
         f.append(recent_acc)
-        
-        # Current streak (positive = correct streak, negative = wrong streak)
         streak = 0
         if recent_history:
             last_val = recent_history[-1] if recent_history else None
@@ -825,9 +645,7 @@ class WordFeatureExtractor:
                     break
             if not last_val:
                 streak = -streak
-        f.append((streak + 10) / 20.0)  # normalize -10..+10 to 0..1
-        
-        # === Binary features (7) ===
+        f.append((streak + 10) / 20.0)
         f.append(1.0 if any(c in word for c in 'äöüÄÖÜ') else 0.0)
         f.append(1.0 if any(c in translation for c in 'äöüÄÖÜ') else 0.0)
         f.append(1.0 if len(word) > 10 else 0.0)
@@ -835,28 +653,17 @@ class WordFeatureExtractor:
         f.append(1.0 if word and word[0].isupper() else 0.0)
         f.append(1.0 if lang == "italian" else 0.0)
         f.append(1.0 if lang == "german" else 0.0)
-        
-        # === One-hot: Topic (9) ===
         for t in WordFeatureExtractor.TOPICS:
             f.append(1.0 if topic == t else 0.0)
-        
-        # === One-hot: Type (5) ===
         for wt in WordFeatureExtractor.TYPES:
             f.append(1.0 if word_type == wt else 0.0)
-        
-        # === One-hot: Gender (5) ===
         for g in WordFeatureExtractor.GENDERS:
             f.append(1.0 if gender == g else 0.0)
-        
-        # === One-hot: Gender2 (5) ===
         for g in WordFeatureExtractor.GENDERS:
             f.append(1.0 if gender2 == g else 0.0)
-        
-        # === Score features (3) ===
         f.append((score + 5) / 10.0)
         f.append(1.0 if score < -2 else 0.0)
         f.append(1.0 if score > 2 else 0.0)
-        
         return f
     
     @staticmethod
@@ -868,21 +675,17 @@ class WordFeatureExtractor:
 # SMART DECK SELECTOR
 # =============================================================================
 class SmartDeckSelector:
-    BATCH_SIZE = 5  # Mini-batch size
+    BATCH_SIZE = 5
     
     def __init__(self, model_path=None):
         self.model = None
         self.optimizer = None
         self.loss_history = []
         self.prediction_log = []
-        
-        # Mini-batch accumulator
         self.batch_x = []
         self.batch_y = []
-        
         self.model = WordPriorityNetwork(input_dim=WordFeatureExtractor.dim())
         self.optimizer = AdamOptimizer(self.model.layers, lr=0.001)
-        
         if model_path and os.path.exists(model_path):
             try:
                 with open(model_path, 'r', encoding='utf-8') as f:
@@ -898,159 +701,106 @@ class SmartDeckSelector:
             try:
                 state = self.model.get_state()
                 state['loss_history'] = self.loss_history[-500:]
-                
-                # Change extension to .json for pure Python version
                 if model_path.endswith('.pth'):
                     model_path = model_path[:-4] + '.json'
-                
                 with open(model_path, 'w', encoding='utf-8') as f:
                     json.dump(state, f)
             except Exception as e:
                 print(f"[!!] Could not save model: {e}")
     
     def _get_temporal_features(self, word_data):
-        """Extract temporal features from word data."""
         times_seen = word_data.get('times_seen', 0)
         last_seen = word_data.get('last_seen', 0)
         history = word_data.get('history', [])
-        
         if last_seen > 0:
             days_since = (time.time() - last_seen) / 86400.0
         else:
-            days_since = 30  # never seen = treat as old
-        
+            days_since = 30
         return times_seen, days_since, history[-5:] if history else []
     
     def compute_priority(self, entry, word_data, lang):
         if not self.model:
             score = word_data.get('score', 0)
             return (5 - score) / 10.0
-        
         score = word_data.get('score', 0)
         times_seen, days_since, recent_history = self._get_temporal_features(word_data)
-        
         features = WordFeatureExtractor.extract(
-            entry["word_display"], entry["translation"],
-            entry["type"], entry["topic"],
-            entry.get("gender"), entry.get("gender2"),
-            score, lang, times_seen, days_since, recent_history
+            entry["word_display"], entry["translation"], entry["type"], entry["topic"],
+            entry.get("gender"), entry.get("gender2"), score, lang, times_seen, days_since, recent_history
         )
-        
         self.model.eval_mode()
         x = PurePythonTensor(features)
         output = self.model.forward(x)
-        
         if NUMPY_AVAILABLE:
             priority = float(output.data[0]) if len(output.shape) > 0 else float(output.data)
         else:
             priority = output.data[0] if isinstance(output.data, list) else output.data
-        
-        # Blend with simple heuristic (helps when model is new)
         score_priority = (5 - score) / 10.0
-        spacing_boost = min(days_since / 7.0, 0.3)  # boost if not seen for days
-        
+        spacing_boost = min(days_since / 7.0, 0.3)
         return 0.6 * priority + 0.2 * score_priority + 0.2 * spacing_boost
     
     def train_step(self, entry, word_data, was_correct, lang):
         if not self.model:
             return None
-        
         score = word_data.get('score', 0)
         times_seen, days_since, recent_history = self._get_temporal_features(word_data)
-        
         features = WordFeatureExtractor.extract(
-            entry["word_display"], entry["translation"],
-            entry["type"], entry["topic"],
-            entry.get("gender"), entry.get("gender2"),
-            score, lang, times_seen, days_since, recent_history
+            entry["word_display"], entry["translation"], entry["type"], entry["topic"],
+            entry.get("gender"), entry.get("gender2"), score, lang, times_seen, days_since, recent_history
         )
-        
         target = 0.1 if was_correct else 0.9
-        
-        # Accumulate for mini-batch
         self.batch_x.append(features)
         self.batch_y.append(target)
-        
         loss_val = None
         pred_val = None
-        
-        # Train when batch is full
         if len(self.batch_x) >= self.BATCH_SIZE:
             self.model.train_mode()
             self.optimizer.zero_grad()
-            
             total_loss = 0.0
-            
-            # Process each sample (simple SGD-style for stability)
             for i in range(len(self.batch_x)):
                 x = PurePythonTensor(self.batch_x[i])
                 y_target = self.batch_y[i]
-                
-                # Forward
                 output = self.model.forward(x)
                 if NUMPY_AVAILABLE:
                     pred = float(output.data[0]) if len(output.shape) > 0 else float(output.data)
                 else:
                     pred = output.data[0] if isinstance(output.data, list) else output.data
-                
-                # MSE loss
                 error = pred - y_target
                 loss = error ** 2
                 total_loss += loss
-                
-                # Backward (gradient of MSE: 2 * (pred - target))
                 grad = PurePythonTensor([2 * error])
                 self.model.backward(grad)
-            
-            # Average loss
             loss_val = total_loss / len(self.batch_x)
-            pred_val = pred  # Last prediction
-            
-            # Optimizer step
+            pred_val = pred
             self.optimizer.step()
-            
             self.model.training_count += len(self.batch_x)
             self.model.total_loss += loss_val * len(self.batch_x)
             self.loss_history.append(loss_val)
-            
-            # Clear batch
             self.batch_x = []
             self.batch_y = []
-        
         self.prediction_log.append({
-            'word': entry["word_display"],
-            'lang': lang,
-            'score': score,
-            'was_correct': was_correct,
-            'prediction': pred_val,
-            'target': target,
-            'loss': loss_val
+            'word': entry["word_display"], 'lang': lang, 'score': score,
+            'was_correct': was_correct, 'prediction': pred_val, 'target': target, 'loss': loss_val
         })
-        
         return loss_val, pred_val
     
     def select_words(self, deck, entries_it, entries_de, word_data_dict, max_count):
         if not deck:
             return []
-        
         priorities = []
         for word_key in deck:
             lang, word = word_key.split(":", 1)
             lang = lang.lower()
-            
             entries = entries_it if lang == "italian" else entries_de
             entry = entries.get(word.lower())
             word_data = word_data_dict.get(word_key, {'score': 0})
-            
             if entry:
                 priority = self.compute_priority(entry, word_data, lang)
             else:
                 score = word_data.get('score', 0)
                 priority = (5 - score) / 10.0
-            
-            priority += random.uniform(0, 0.05)  # small randomness
+            priority += random.uniform(0, 0.05)
             priorities.append((word_key, priority))
-        
         priorities.sort(key=lambda x: x[1], reverse=True)
         selected = [w for w, _ in priorities[:max_count]]
         random.shuffle(selected)
@@ -1060,36 +810,16 @@ class SmartDeckSelector:
         if not self.model:
             print("No model available")
             return
-        
-        print("\n" + "="*70)
+        print("\n" + "="*60)
         print("NEURAL NETWORK LOG (Pure Python)")
-        print("="*70)
-        
+        print("="*60)
         n = self.model.training_count
         avg_loss = self.model.total_loss / max(1, n)
-        print(f"\nSamples: {n}")
-        print(f"Avg loss: {avg_loss:.4f}")
-        
+        print(f"Samples: {n}, Avg loss: {avg_loss:.4f}")
         if self.loss_history and len(self.loss_history) >= 5:
             recent = self.loss_history[-10:]
-            old = self.loss_history[:10]
-            print(f"First 10 avg: {sum(old)/len(old):.4f}")
-            print(f"Last 10 avg: {sum(recent)/len(recent):.4f}")
-        
-        if self.prediction_log:
-            correct = 0
-            recent_logs = self.prediction_log[-50:]
-            for log in recent_logs:
-                if log['prediction'] is not None:
-                    if (not log['was_correct'] and log['prediction'] > 0.5) or \
-                       (log['was_correct'] and log['prediction'] < 0.5):
-                        correct += 1
-            
-            if recent_logs:
-                acc = correct / len(recent_logs) * 100
-                print(f"Accuracy: {acc:.0f}%")
-        
-        print("="*70 + "\n")
+            print(f"Recent loss: {sum(recent)/len(recent):.4f}")
+        print("="*60 + "\n")
 
 
 # =============================================================================
@@ -1103,9 +833,8 @@ class Parolino(toga.App):
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.deck_save_path = os.path.join(script_dir, 'deck_save.json')
-        self.model_save_path = os.path.join(script_dir, 'word_model.json')  # Changed to .json
+        self.model_save_path = os.path.join(script_dir, 'word_model.json')
         
-        # Load dictionaries
         self.dict_it = []
         self.dict_de = []
         
@@ -1126,10 +855,9 @@ class Parolino(toga.App):
         self.entries_it = {e["word_display"].lower(): e for e in self.dict_it}
         self.entries_de = {e["word_display"].lower(): e for e in self.dict_de}
         
-        # State
         self.deck = set()
         self.shuffled_deck = []
-        self.word_data = {}  # Extended data: {word_key: {score, times_seen, last_seen, history}}
+        self.word_data = {}
         self.max_deck_size = None
         self.current_dict = "italian"
         self.card_direction = "it_de"
@@ -1138,21 +866,23 @@ class Parolino(toga.App):
         self.ui_language = "italian"
         
         self.selector = SmartDeckSelector(self.model_save_path)
-        
         self._load_deck()
         
-        # UI
+        # UI - main container
         main_box = toga.Box(style=Pack(direction=COLUMN))
         
         self.dict_view = self._create_dict_view()
         self.flash_view = self._create_flash_view()
         self.stats_view = self._create_stats_view()
         
-        self.tabs = toga.OptionContainer(content=[
-            ("ABC", self.dict_view),
-            ("Flashcards", self.flash_view),
-            ("Nerd", self.stats_view)
-        ])
+        self.tabs = toga.OptionContainer(
+            style=Pack(flex=1),
+            content=[
+                ("ABC", self.dict_view),
+                ("Flashcards", self.flash_view),
+                ("Nerd", self.stats_view)
+            ]
+        )
         
         main_box.add(self.tabs)
         
@@ -1176,24 +906,15 @@ class Parolino(toga.App):
                     self.shuffled_deck = data.get('shuffled_deck', [])
                     self.max_deck_size = data.get('max_deck_size')
                     self.current_index = data.get('current_index', 0)
-                    
-                    # Load extended word data or migrate from old format
                     if 'word_data' in data:
                         self.word_data = data['word_data']
                     elif 'word_scores' in data:
-                        # Migrate from old format
                         for key, score in data['word_scores'].items():
-                            self.word_data[key] = {
-                                'score': score,
-                                'times_seen': abs(score),
-                                'last_seen': time.time(),
-                                'history': []
-                            }
-                    
+                            self.word_data[key] = {'score': score, 'times_seen': abs(score), 
+                                                   'last_seen': time.time(), 'history': []}
                     print(f"[OK] Loaded deck: {len(self.deck)} words")
         except Exception as e:
             print(f"[!!] Error loading deck: {e}")
-        
         if not self.shuffled_deck:
             self._rebuild_deck()
     
@@ -1201,10 +922,8 @@ class Parolino(toga.App):
         try:
             with open(self.deck_save_path, 'w', encoding='utf-8') as f:
                 json.dump({
-                    'deck': list(self.deck),
-                    'shuffled_deck': self.shuffled_deck,
-                    'word_data': self.word_data,
-                    'max_deck_size': self.max_deck_size,
+                    'deck': list(self.deck), 'shuffled_deck': self.shuffled_deck,
+                    'word_data': self.word_data, 'max_deck_size': self.max_deck_size,
                     'current_index': self.current_index
                 }, f, ensure_ascii=False, indent=2)
             self.selector.save_model(self.model_save_path)
@@ -1216,11 +935,9 @@ class Parolino(toga.App):
             self.shuffled_deck = []
             self.current_index = 0
             return
-        
         max_count = self.max_deck_size or len(self.deck)
         self.shuffled_deck = self.selector.select_words(
-            self.deck, self.entries_it, self.entries_de,
-            self.word_data, max_count
+            self.deck, self.entries_it, self.entries_de, self.word_data, max_count
         )
         self.current_index = 0
     
@@ -1228,74 +945,61 @@ class Parolino(toga.App):
         return TRANSLATIONS[self.ui_language].get(key, key)
     
     def _show_info(self, widget):
-        info_text = INFO_TEXT[self.ui_language]
-        self.main_window.info_dialog(self._t("info_title"), info_text)
+        self.main_window.info_dialog(self._t("info_title"), INFO_TEXT[self.ui_language])
     
     def _get_word_data(self, word_key):
         if word_key not in self.word_data:
-            self.word_data[word_key] = {
-                'score': 0,
-                'times_seen': 0,
-                'last_seen': 0,
-                'history': []
-            }
+            self.word_data[word_key] = {'score': 0, 'times_seen': 0, 'last_seen': 0, 'history': []}
         return self.word_data[word_key]
     
     # =========================================================================
-    # DICTIONARY VIEW
+    # DICTIONARY VIEW - ANDROID FIXED
     # =========================================================================
     def _create_dict_view(self):
-        container = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        # Use ScrollContainer for Android compatibility
+        scroll = toga.ScrollContainer(horizontal=False, style=Pack(flex=1))
+        container = toga.Box(style=Pack(direction=COLUMN, padding=5))
         
-        lang_bar = toga.Box(style=Pack(direction=ROW, margin=5))
-        
-        self.btn_it = toga.Button(
-            "IT", on_press=self._select_italian,
-            style=Pack(flex=1, height=40, margin=2)
-        )
-        self.btn_de = toga.Button(
-            "DE", on_press=self._select_german,
-            style=Pack(flex=1, height=40, margin=2)
-        )
-        self.btn_clear = toga.Button(
-            "X", on_press=self._clear_deck,
-            style=Pack(width=50, height=40, margin=2)
-        )
-        self.btn_info = toga.Button(
-            "?", on_press=self._show_info,
-            style=Pack(width=40, height=40, margin=2)
-        )
-        
+        # Top buttons
+        lang_bar = toga.Box(style=Pack(direction=ROW))
+        self.btn_it = toga.Button("IT", on_press=self._select_italian, style=Pack(flex=1, height=50, padding=2))
+        self.btn_de = toga.Button("DE", on_press=self._select_german, style=Pack(flex=1, height=50, padding=2))
+        self.btn_clear = toga.Button("X", on_press=self._clear_deck, style=Pack(width=50, height=50, padding=2))
+        self.btn_info = toga.Button("?", on_press=self._show_info, style=Pack(width=50, height=50, padding=2))
         lang_bar.add(self.btn_it)
         lang_bar.add(self.btn_de)
         lang_bar.add(self.btn_clear)
         lang_bar.add(self.btn_info)
         container.add(lang_bar)
         
+        # Search
         self.search_input = toga.TextInput(
             placeholder=self._t("search_placeholder"),
             on_change=self._on_search,
-            style=Pack(margin=5, height=35)
+            style=Pack(height=50, padding=5)
         )
         container.add(self.search_input)
         
+        # Word list - fixed height for Android (will scroll inside ScrollContainer)
         self.word_list = toga.Table(
-            headings=None,
+            headings=["Parola", "★"],
             accessors=["word", "star"],
             data=[],
             on_activate=self._on_word_click,
-            style=Pack(flex=1)
+            style=Pack(height=400, padding=5)
         )
         container.add(self.word_list)
         
+        # Info label
         self.info_label = toga.Label(
             self._t("click_info"),
-            style=Pack(margin=5, font_size=9)
+            style=Pack(padding=5, font_size=11)
         )
         container.add(self.info_label)
         
+        scroll.content = container
         self._update_word_list()
-        return container
+        return scroll
     
     def _select_italian(self, widget):
         self.current_dict = "italian"
@@ -1318,12 +1022,9 @@ class Parolino(toga.App):
     
     def _update_word_list(self):
         search = self.search_input.value.strip().lower() if hasattr(self, 'search_input') else ""
-        
         dictionary = self.dict_it if self.current_dict == "italian" else self.dict_de
         lang_key = "ITALIAN" if self.current_dict == "italian" else "GERMAN"
-        
         data = []
-        
         if not search:
             for word_key in sorted(self.deck):
                 lang, word = word_key.split(":", 1)
@@ -1337,25 +1038,21 @@ class Parolino(toga.App):
                 word_key = f"{lang_key}:{entry['word_display']}"
                 star = "★" if word_key in self.deck else ""
                 data.append({"word": entry["word_display"], "star": star})
-        
         self.word_list.data = data
     
     def _on_word_click(self, widget, row):
         if not row:
             return
-        
         lang_key = "ITALIAN" if self.current_dict == "italian" else "GERMAN"
         word_key = f"{lang_key}:{row.word}"
-        
         if word_key in self.deck:
             self.deck.remove(word_key)
             if word_key in self.shuffled_deck:
                 self.shuffled_deck.remove(word_key)
         else:
             self.deck.add(word_key)
-            self._get_word_data(word_key)  # Initialize if needed
+            self._get_word_data(word_key)
             self.shuffled_deck.append(word_key)
-        
         self._save_deck()
         self._update_word_list()
         self._update_flash_view()
@@ -1366,11 +1063,7 @@ class Parolino(toga.App):
     async def _confirm_clear(self):
         if not self.deck:
             return
-        
-        confirmed = await self.main_window.confirm_dialog(
-            "Clear", self._t("clear_confirm") + f" ({len(self.deck)})"
-        )
-        
+        confirmed = await self.main_window.confirm_dialog("Clear", self._t("clear_confirm") + f" ({len(self.deck)})")
         if confirmed:
             self.deck.clear()
             self.shuffled_deck.clear()
@@ -1380,64 +1073,55 @@ class Parolino(toga.App):
             self._update_flash_view()
     
     # =========================================================================
-    # FLASHCARD VIEW
+    # FLASHCARD VIEW - ANDROID FIXED
     # =========================================================================
     def _create_flash_view(self):
-        container = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        # Use ScrollContainer for Android compatibility
+        scroll = toga.ScrollContainer(horizontal=False, style=Pack(flex=1))
+        container = toga.Box(style=Pack(direction=COLUMN, padding=5))
         
-        top_bar = toga.Box(style=Pack(direction=ROW, margin=5))
-        
-        self.btn_itde = toga.Button(
-            "IT→DE", on_press=self._set_it_de,
-            style=Pack(flex=1, height=40, margin=2)
-        )
-        self.btn_deit = toga.Button(
-            "DE→IT", on_press=self._set_de_it,
-            style=Pack(flex=1, height=40, margin=2)
-        )
+        # Top bar
+        top_bar = toga.Box(style=Pack(direction=ROW))
+        self.btn_itde = toga.Button("IT→DE", on_press=self._set_it_de, style=Pack(flex=1, height=50, padding=2))
+        self.btn_deit = toga.Button("DE→IT", on_press=self._set_de_it, style=Pack(flex=1, height=50, padding=2))
+        self.max_input = toga.TextInput(value=str(self.max_deck_size or ""), on_change=self._on_max_change, style=Pack(width=55, height=50, padding=2))
+        self.btn_new = toga.Button("⇄", on_press=self._generate_deck, style=Pack(width=55, height=50, padding=2))
         top_bar.add(self.btn_itde)
         top_bar.add(self.btn_deit)
-        
-        self.max_input = toga.TextInput(
-            value=str(self.max_deck_size or ""),
-            on_change=self._on_max_change,
-            style=Pack(width=50, height=35, margin_left=10)
-        )
         top_bar.add(self.max_input)
-        
-        self.btn_new = toga.Button(
-            "⇄", on_press=self._generate_deck,
-            style=Pack(width=50, height=40, margin=2)
-        )
         top_bar.add(self.btn_new)
-        
         container.add(top_bar)
         
-        self.counter_label = toga.Label("", style=Pack(margin=10, text_align="center"))
+        # Counter
+        self.counter_label = toga.Label("", style=Pack(height=40, padding=10, text_align="center"))
         container.add(self.counter_label)
         
-        self.card_label = toga.Label("", style=Pack(margin=20, font_size=24, text_align="center"))
-        container.add(self.card_label)
+        # Card - fixed height for Android
+        card_box = toga.Box(style=Pack(direction=COLUMN, height=200, padding=20))
+        self.card_label = toga.Label("", style=Pack(font_size=32, text_align="center"))
+        card_box.add(self.card_label)
+        container.add(card_box)
         
-        container.add(toga.Box(style=Pack(flex=1)))
-        
-        nav_box = toga.Box(style=Pack(direction=ROW, margin=5))
-        self.btn_prev = toga.Button("<", on_press=self._prev_card, style=Pack(flex=1, height=50, margin=2))
-        self.btn_flip = toga.Button("↻", on_press=self._flip_card, style=Pack(flex=1, height=50, margin=2))
-        self.btn_next = toga.Button(">", on_press=self._next_card, style=Pack(flex=1, height=50, margin=2))
+        # Nav buttons
+        nav_box = toga.Box(style=Pack(direction=ROW))
+        self.btn_prev = toga.Button("<", on_press=self._prev_card, style=Pack(flex=1, height=60, padding=2))
+        self.btn_flip = toga.Button("↻", on_press=self._flip_card, style=Pack(flex=1, height=60, padding=2))
+        self.btn_next = toga.Button(">", on_press=self._next_card, style=Pack(flex=1, height=60, padding=2))
         nav_box.add(self.btn_prev)
         nav_box.add(self.btn_flip)
         nav_box.add(self.btn_next)
         container.add(nav_box)
         
-        feedback_box = toga.Box(style=Pack(direction=ROW, margin=5))
-        self.btn_wrong = toga.Button("-", on_press=self._mark_wrong, style=Pack(flex=1, height=50, margin=2))
-        self.btn_correct = toga.Button("+", on_press=self._mark_correct, style=Pack(flex=1, height=50, margin=2))
+        # Feedback buttons
+        feedback_box = toga.Box(style=Pack(direction=ROW))
+        self.btn_wrong = toga.Button("−", on_press=self._mark_wrong, style=Pack(flex=1, height=60, padding=2))
+        self.btn_correct = toga.Button("+", on_press=self._mark_correct, style=Pack(flex=1, height=60, padding=2))
         feedback_box.add(self.btn_wrong)
         feedback_box.add(self.btn_correct)
         container.add(feedback_box)
         
-        return container
+        scroll.content = container
+        return scroll
     
     def _set_it_de(self, widget):
         self.card_direction = "it_de"
@@ -1463,24 +1147,17 @@ class Parolino(toga.App):
             self.card_label.text = ""
             self.counter_label.text = "No cards"
             return
-        
         if self.current_index >= len(self.shuffled_deck):
             self.current_index = 0
-        
         word_key = self.shuffled_deck[self.current_index]
         lang, word = word_key.split(":", 1)
-        
         entries = self.entries_it if lang == "ITALIAN" else self.entries_de
         entry = entries.get(word.lower())
-        
         if not entry:
             self.card_label.text = word
             return
-        
         self.counter_label.text = f"{self.current_index + 1}/{len(self.shuffled_deck)}"
-        
         is_italian = lang == "ITALIAN"
-        
         if self.card_direction == "it_de":
             if self.show_front:
                 self.card_label.text = entry["word_display"] if is_italian else entry["translation"]
@@ -1488,26 +1165,22 @@ class Parolino(toga.App):
                 if is_italian:
                     text = entry["translation"]
                     if entry["type"] == "noun" and entry.get("gender2"):
-                        text = add_german_article(text, entry["gender2"], "noun",
-                                                  entry["word_display"], entry["translation"])
+                        text = add_german_article(text, entry["gender2"], "noun", entry["word_display"], entry["translation"])
                 else:
                     text = entry["word_display"]
                     if entry["type"] == "noun" and entry.get("gender"):
-                        text = add_german_article(text, entry["gender"], "noun",
-                                                  entry["translation"], entry["word_display"])
+                        text = add_german_article(text, entry["gender"], "noun", entry["translation"], entry["word_display"])
                 self.card_label.text = text
         else:
             if self.show_front:
                 if is_italian:
                     text = entry["translation"]
                     if entry["type"] == "noun" and entry.get("gender2"):
-                        text = add_german_article(text, entry["gender2"], "noun",
-                                                  entry["word_display"], entry["translation"])
+                        text = add_german_article(text, entry["gender2"], "noun", entry["word_display"], entry["translation"])
                 else:
                     text = entry["word_display"]
                     if entry["type"] == "noun" and entry.get("gender"):
-                        text = add_german_article(text, entry["gender"], "noun",
-                                                  entry["translation"], entry["word_display"])
+                        text = add_german_article(text, entry["gender"], "noun", entry["translation"], entry["word_display"])
                 self.card_label.text = text
             else:
                 self.card_label.text = entry["word_display"] if is_italian else entry["translation"]
@@ -1544,19 +1217,14 @@ class Parolino(toga.App):
         word_key, entry, lang, word_data = self._get_current_entry()
         if not entry:
             return
-        
-        # Update word data
-        old_score = word_data['score']
-        word_data['score'] = min(5, old_score + 1)
+        word_data['score'] = min(5, word_data['score'] + 1)
         word_data['times_seen'] = word_data.get('times_seen', 0) + 1
         word_data['last_seen'] = time.time()
         word_data.setdefault('history', []).append(True)
-        word_data['history'] = word_data['history'][-10:]  # Keep last 10
-        
+        word_data['history'] = word_data['history'][-10:]
         result = self.selector.train_step(entry, word_data, was_correct=True, lang=lang)
         if result and result[0] is not None:
-            print(f"[+] {entry['word_display'][:12]:<12} batch trained, loss:{result[0]:.4f}")
-        
+            print(f"[+] {entry['word_display'][:12]:<12} loss:{result[0]:.4f}")
         self._save_deck()
         self._next_card(widget)
     
@@ -1564,116 +1232,76 @@ class Parolino(toga.App):
         word_key, entry, lang, word_data = self._get_current_entry()
         if not entry:
             return
-        
-        # Update word data
-        old_score = word_data['score']
-        word_data['score'] = max(-5, old_score - 1)
+        word_data['score'] = max(-5, word_data['score'] - 1)
         word_data['times_seen'] = word_data.get('times_seen', 0) + 1
         word_data['last_seen'] = time.time()
         word_data.setdefault('history', []).append(False)
         word_data['history'] = word_data['history'][-10:]
-        
         result = self.selector.train_step(entry, word_data, was_correct=False, lang=lang)
         if result and result[0] is not None:
-            print(f"[-] {entry['word_display'][:12]:<12} batch trained, loss:{result[0]:.4f}")
-        
+            print(f"[-] {entry['word_display'][:12]:<12} loss:{result[0]:.4f}")
         self._save_deck()
         self._next_card(widget)
     
     def _generate_deck(self, widget):
         if not self.deck:
             return
-        
         try:
             max_size = int(self.max_input.value) if self.max_input.value else len(self.deck)
         except ValueError:
             max_size = len(self.deck)
-        
         self.shuffled_deck = self.selector.select_words(
-            self.deck, self.entries_it, self.entries_de,
-            self.word_data, max_size
+            self.deck, self.entries_it, self.entries_de, self.word_data, max_size
         )
         self.current_index = 0
         self.show_front = True
         self._update_flash_view()
         self._save_deck()
-        
         self.selector.print_training_log()
     
     # =========================================================================
     # NERD VIEW
     # =========================================================================
     def _create_stats_view(self):
-        container = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=10))
+        scroll = toga.ScrollContainer(horizontal=False, style=Pack(flex=1))
+        container = toga.Box(style=Pack(direction=COLUMN, padding=10))
         
-        self.stats_text = toga.MultilineTextInput(readonly=True, style=Pack(flex=1, margin=5))
+        self.stats_text = toga.MultilineTextInput(readonly=True, style=Pack(height=300, padding=5))
         container.add(self.stats_text)
         
-        btn_refresh = toga.Button("Refresh", on_press=self._refresh_stats, style=Pack(height=40, margin=5))
+        btn_refresh = toga.Button("Refresh", on_press=self._refresh_stats, style=Pack(height=50, padding=5))
         container.add(btn_refresh)
         
-        btn_priorities = toga.Button("Priorities", on_press=self._show_priorities, style=Pack(height=40, margin=5))
+        btn_priorities = toga.Button("Priorities", on_press=self._show_priorities, style=Pack(height=50, padding=5))
         container.add(btn_priorities)
         
-        btn_log = toga.Button("Full Log", on_press=self._print_log, style=Pack(height=40, margin=5))
+        btn_log = toga.Button("Full Log", on_press=self._print_log, style=Pack(height=50, padding=5))
         container.add(btn_log)
         
-        return container
+        scroll.content = container
+        return scroll
     
     def _update_stats_view(self):
         if not hasattr(self, 'stats_text'):
             return
-        
-        lines = []
-        lines.append("Pure Python Neural Net")
-        lines.append("")
-        
+        lines = ["Pure Python Neural Net", ""]
         if self.selector.model:
             n = self.selector.model.training_count
             avg = self.selector.model.total_loss / max(1, n)
-            
             lines.append(f"Samples: {n}")
             lines.append(f"Loss: {avg:.3f}")
-            
             if self.selector.loss_history and len(self.selector.loss_history) >= 3:
                 recent = self.selector.loss_history[-5:]
                 lines.append(f"Recent: {sum(recent)/len(recent):.3f}")
-            
             lines.append("")
-            
             if n < 20:
-                lines.append(f"Status: warming up")
+                lines.append("Status: warming up")
             elif n < 50:
-                lines.append(f"Status: learning")
+                lines.append("Status: learning")
             else:
-                lines.append(f"Status: trained")
-            
-            if self.selector.prediction_log:
-                correct = 0
-                recent_logs = [l for l in self.selector.prediction_log[-30:] if l['prediction'] is not None]
-                for log in recent_logs:
-                    if (not log['was_correct'] and log['prediction'] > 0.5) or \
-                       (log['was_correct'] and log['prediction'] < 0.5):
-                        correct += 1
-                if recent_logs:
-                    acc = correct / len(recent_logs) * 100
-                    lines.append(f"Accuracy: {acc:.0f}%")
-            
-            lines.append("")
-            lines.append("Scores:")
-            
-            counts = {}
-            for wd in self.word_data.values():
-                score = wd.get('score', 0)
-                counts[score] = counts.get(score, 0) + 1
-            
-            for score in range(-5, 6):
-                count = counts.get(score, 0)
-                if count > 0:
-                    lines.append(f"  {score:+d}: {count}")
+                lines.append("Status: trained")
         else:
             lines.append("No model")
-        
         self.stats_text.value = "\n".join(lines)
     
     def _refresh_stats(self, widget):
@@ -1683,28 +1311,21 @@ class Parolino(toga.App):
         if not self.deck:
             self.stats_text.value = "No words"
             return
-        
         lines = ["Priority ranking:", ""]
-        
         priorities = []
         for word_key in self.deck:
             lang, word = word_key.split(":", 1)
             entries = self.entries_it if lang == "ITALIAN" else self.entries_de
             entry = entries.get(word.lower())
             word_data = self.word_data.get(word_key, {'score': 0})
-            
             if entry:
                 priority = self.selector.compute_priority(entry, word_data, lang.lower())
             else:
                 priority = 0.5
-            
             priorities.append((word, priority))
-        
         priorities.sort(key=lambda x: x[1], reverse=True)
-        
         for word, pri in priorities[:20]:
             lines.append(f"{word[:12]:<12} {pri:.2f}")
-        
         self.stats_text.value = "\n".join(lines)
     
     def _print_log(self, widget):
