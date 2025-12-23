@@ -2,6 +2,9 @@
 Parolino - Italian-German Flashcard App with Deep Learning
 ==========================================================
 
+PURE PYTHON IMPLEMENTATION (No PyTorch required)
+Suitable for Android deployment via BeeWare/Kivy
+
 NEURAL NETWORK ARCHITECTURE:
 ----------------------------
 Type: Multi-Layer Perceptron (MLP) / Feedforward Neural Network
@@ -25,44 +28,6 @@ Hyperparameters:
     - Batch size: 5 (mini-batch training)
     - Dropout: 0.2
 
-FEATURES (41 total):
--------------------
-Continuous (7):
-    - Word length (normalized 0-1)
-    - Translation length (normalized 0-1)
-    - Vowel count (normalized 0-1)
-    - Times seen (normalized 0-1)
-    - Days since last seen (normalized 0-1)
-    - Recent accuracy (last 5 attempts)
-    - Current streak (normalized)
-
-Binary (7):
-    - Has umlauts (ä, ö, ü) in word
-    - Has umlauts in translation
-    - Is long word (>10 chars)
-    - Has ß (eszett)
-    - First letter uppercase
-    - Is Italian
-    - Is German
-
-One-hot encoded:
-    - Topic (9): general, food, nature, health, sports, work, science, music, religion
-    - Type (5): general, noun, verb, adjective, adverb
-    - Gender word (5): m, f, n, pl, None
-    - Gender translation (5): m, f, n, pl, None
-
-Score features (3):
-    - Normalized score (0-1)
-    - Very negative (<-2)
-    - Very positive (>2)
-
-TRAINING:
----------
-- User presses + → target = 0.1 (low priority, knows it)
-- User presses - → target = 0.9 (high priority, needs practice)
-- Mini-batch: accumulates 5 samples, then trains together
-- Selection: picks words with HIGHEST predicted priority
-
 ==========================================================
 """
 
@@ -74,17 +39,582 @@ import re
 import json
 import asyncio
 import time
+import math
 
-# PyTorch
-TORCH_AVAILABLE = False
+# Try to use numpy for faster math, fall back to pure Python
 try:
-    import torch
-    import torch.nn as nn
-    import torch.optim as optim
-    TORCH_AVAILABLE = True
-    print("[OK] PyTorch loaded - Deep Learning enabled!")
+    import numpy as np
+    NUMPY_AVAILABLE = True
+    print("[OK] NumPy available - using accelerated math")
 except ImportError:
-    print("[!!] PyTorch not available - install with: pip install torch")
+    NUMPY_AVAILABLE = False
+    print("[OK] Pure Python math (no NumPy)")
+
+# Deep learning is always available now (pure Python)
+TORCH_AVAILABLE = True
+print("[OK] Pure Python Deep Learning enabled!")
+
+
+# =============================================================================
+# PURE PYTHON NEURAL NETWORK IMPLEMENTATION
+# =============================================================================
+
+class PurePythonTensor:
+    """Simple tensor class for pure Python neural network."""
+    
+    def __init__(self, data, shape=None):
+        if NUMPY_AVAILABLE:
+            if isinstance(data, np.ndarray):
+                self.data = data.astype(np.float32)
+            else:
+                self.data = np.array(data, dtype=np.float32)
+            self.shape = self.data.shape
+        else:
+            # Pure Python: flatten and store shape
+            if isinstance(data, list):
+                if shape:
+                    self.shape = tuple(shape)
+                    self.data = self._flatten(data)
+                elif data and isinstance(data[0], list):
+                    # 2D list
+                    self.shape = (len(data), len(data[0]))
+                    self.data = self._flatten(data)
+                else:
+                    # 1D list
+                    self.shape = (len(data),)
+                    self.data = [float(x) for x in data]
+            else:
+                self.shape = (1,)
+                self.data = [float(data)]
+    
+    def _flatten(self, lst):
+        """Flatten nested list."""
+        result = []
+        for item in lst:
+            if isinstance(item, list):
+                result.extend(self._flatten(item))
+            else:
+                result.append(float(item))
+        return result
+    
+    def __getitem__(self, idx):
+        if NUMPY_AVAILABLE:
+            return self.data[idx]
+        if len(self.shape) == 1:
+            return self.data[idx]
+        elif len(self.shape) == 2:
+            rows, cols = self.shape
+            if isinstance(idx, tuple):
+                i, j = idx
+                return self.data[i * cols + j]
+            else:
+                # Return row
+                start = idx * cols
+                return self.data[start:start + cols]
+        return self.data[idx]
+    
+    def __setitem__(self, idx, value):
+        if NUMPY_AVAILABLE:
+            self.data[idx] = value
+        elif len(self.shape) == 2:
+            rows, cols = self.shape
+            if isinstance(idx, tuple):
+                i, j = idx
+                self.data[i * cols + j] = float(value)
+        else:
+            self.data[idx] = float(value)
+    
+    def tolist(self):
+        if NUMPY_AVAILABLE:
+            return self.data.tolist()
+        if len(self.shape) == 1:
+            return list(self.data)
+        elif len(self.shape) == 2:
+            rows, cols = self.shape
+            return [[self.data[i * cols + j] for j in range(cols)] for i in range(rows)]
+        return list(self.data)
+    
+    def copy(self):
+        if NUMPY_AVAILABLE:
+            return PurePythonTensor(self.data.copy())
+        return PurePythonTensor(list(self.data), self.shape)
+
+
+def tensor_zeros(shape):
+    """Create zero tensor."""
+    if NUMPY_AVAILABLE:
+        return PurePythonTensor(np.zeros(shape, dtype=np.float32))
+    if isinstance(shape, int):
+        shape = (shape,)
+    total = 1
+    for s in shape:
+        total *= s
+    return PurePythonTensor([0.0] * total, shape)
+
+
+def tensor_randn(shape, scale=1.0):
+    """Create tensor with random normal values."""
+    if NUMPY_AVAILABLE:
+        return PurePythonTensor(np.random.randn(*shape).astype(np.float32) * scale)
+    
+    if isinstance(shape, int):
+        shape = (shape,)
+    total = 1
+    for s in shape:
+        total *= s
+    
+    # Box-Muller transform for normal distribution
+    data = []
+    for _ in range((total + 1) // 2):
+        u1 = random.random()
+        u2 = random.random()
+        while u1 == 0:
+            u1 = random.random()
+        z0 = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2) * scale
+        z1 = math.sqrt(-2 * math.log(u1)) * math.sin(2 * math.pi * u2) * scale
+        data.extend([z0, z1])
+    
+    return PurePythonTensor(data[:total], shape)
+
+
+def matmul(a, b):
+    """Matrix multiplication: a @ b"""
+    if NUMPY_AVAILABLE:
+        result = np.dot(a.data, b.data)
+        return PurePythonTensor(result)
+    
+    # Pure Python matmul
+    if len(a.shape) == 1 and len(b.shape) == 2:
+        # Vector @ Matrix: (n,) @ (n, m) -> (m,)
+        n, m = b.shape
+        result = [0.0] * m
+        for j in range(m):
+            for i in range(n):
+                result[j] += a.data[i] * b.data[i * m + j]
+        return PurePythonTensor(result, (m,))
+    
+    elif len(a.shape) == 2 and len(b.shape) == 2:
+        # Matrix @ Matrix: (p, n) @ (n, m) -> (p, m)
+        p, n = a.shape
+        n2, m = b.shape
+        assert n == n2, f"Shape mismatch: {a.shape} @ {b.shape}"
+        
+        result = [0.0] * (p * m)
+        for i in range(p):
+            for j in range(m):
+                s = 0.0
+                for k in range(n):
+                    s += a.data[i * n + k] * b.data[k * m + j]
+                result[i * m + j] = s
+        return PurePythonTensor(result, (p, m))
+    
+    elif len(a.shape) == 2 and len(b.shape) == 1:
+        # Matrix @ Vector: (p, n) @ (n,) -> (p,)
+        p, n = a.shape
+        assert n == b.shape[0], f"Shape mismatch: {a.shape} @ {b.shape}"
+        
+        result = [0.0] * p
+        for i in range(p):
+            s = 0.0
+            for j in range(n):
+                s += a.data[i * n + j] * b.data[j]
+            result[i] = s
+        return PurePythonTensor(result, (p,))
+    
+    raise ValueError(f"Unsupported shapes for matmul: {a.shape} @ {b.shape}")
+
+
+def tensor_add(a, b):
+    """Element-wise addition."""
+    if NUMPY_AVAILABLE:
+        return PurePythonTensor(a.data + b.data)
+    
+    if a.shape != b.shape:
+        # Broadcasting for bias addition
+        if len(b.shape) == 1 and len(a.shape) == 2:
+            rows, cols = a.shape
+            result = list(a.data)
+            for i in range(rows):
+                for j in range(cols):
+                    result[i * cols + j] += b.data[j]
+            return PurePythonTensor(result, a.shape)
+        elif len(a.shape) == 1 and len(b.shape) == 1:
+            assert a.shape[0] == b.shape[0]
+    
+    result = [a.data[i] + b.data[i] for i in range(len(a.data))]
+    return PurePythonTensor(result, a.shape)
+
+
+def tensor_sub(a, b):
+    """Element-wise subtraction."""
+    if NUMPY_AVAILABLE:
+        return PurePythonTensor(a.data - b.data)
+    result = [a.data[i] - b.data[i] for i in range(len(a.data))]
+    return PurePythonTensor(result, a.shape)
+
+
+def tensor_mul(a, b):
+    """Element-wise multiplication."""
+    if NUMPY_AVAILABLE:
+        if isinstance(b, (int, float)):
+            return PurePythonTensor(a.data * b)
+        return PurePythonTensor(a.data * b.data)
+    
+    if isinstance(b, (int, float)):
+        result = [x * b for x in a.data]
+    else:
+        result = [a.data[i] * b.data[i] for i in range(len(a.data))]
+    return PurePythonTensor(result, a.shape)
+
+
+def tensor_sum(a):
+    """Sum all elements."""
+    if NUMPY_AVAILABLE:
+        return float(np.sum(a.data))
+    return sum(a.data)
+
+
+def tensor_mean(a):
+    """Mean of all elements."""
+    if NUMPY_AVAILABLE:
+        return float(np.mean(a.data))
+    return sum(a.data) / len(a.data)
+
+
+class LinearLayer:
+    """Fully connected layer."""
+    
+    def __init__(self, in_features, out_features):
+        self.in_features = in_features
+        self.out_features = out_features
+        
+        # Xavier initialization
+        scale = math.sqrt(2.0 / (in_features + out_features))
+        self.weight = tensor_randn((in_features, out_features), scale)
+        self.bias = tensor_zeros(out_features)
+        
+        # Gradients
+        self.weight_grad = tensor_zeros((in_features, out_features))
+        self.bias_grad = tensor_zeros(out_features)
+        
+        # Cache for backprop
+        self.input_cache = None
+    
+    def forward(self, x):
+        """Forward pass: y = x @ W + b"""
+        self.input_cache = x
+        out = matmul(x, self.weight)
+        out = tensor_add(out, self.bias)
+        return out
+    
+    def backward(self, grad_output):
+        """Backward pass."""
+        # grad_output shape: (batch, out_features) or (out_features,)
+        x = self.input_cache
+        
+        if NUMPY_AVAILABLE:
+            if len(x.shape) == 1:
+                # Single sample
+                self.weight_grad.data += np.outer(x.data, grad_output.data)
+                self.bias_grad.data += grad_output.data
+                grad_input = PurePythonTensor(grad_output.data @ self.weight.data.T)
+            else:
+                # Batch
+                self.weight_grad.data += x.data.T @ grad_output.data
+                self.bias_grad.data += np.sum(grad_output.data, axis=0)
+                grad_input = PurePythonTensor(grad_output.data @ self.weight.data.T)
+        else:
+            # Pure Python
+            if len(x.shape) == 1:
+                # Single sample: outer product
+                for i in range(self.in_features):
+                    for j in range(self.out_features):
+                        idx = i * self.out_features + j
+                        self.weight_grad.data[idx] += x.data[i] * grad_output.data[j]
+                
+                for j in range(self.out_features):
+                    self.bias_grad.data[j] += grad_output.data[j]
+                
+                # grad_input = grad_output @ W.T
+                grad_input_data = [0.0] * self.in_features
+                for i in range(self.in_features):
+                    for j in range(self.out_features):
+                        grad_input_data[i] += grad_output.data[j] * self.weight.data[i * self.out_features + j]
+                grad_input = PurePythonTensor(grad_input_data, (self.in_features,))
+            else:
+                # Batch
+                batch_size = x.shape[0]
+                for b in range(batch_size):
+                    for i in range(self.in_features):
+                        for j in range(self.out_features):
+                            idx = i * self.out_features + j
+                            x_idx = b * self.in_features + i
+                            g_idx = b * self.out_features + j
+                            self.weight_grad.data[idx] += x.data[x_idx] * grad_output.data[g_idx]
+                    
+                for b in range(batch_size):
+                    for j in range(self.out_features):
+                        g_idx = b * self.out_features + j
+                        self.bias_grad.data[j] += grad_output.data[g_idx]
+                
+                # grad_input
+                grad_input_data = [0.0] * (batch_size * self.in_features)
+                for b in range(batch_size):
+                    for i in range(self.in_features):
+                        s = 0.0
+                        for j in range(self.out_features):
+                            g_idx = b * self.out_features + j
+                            s += grad_output.data[g_idx] * self.weight.data[i * self.out_features + j]
+                        grad_input_data[b * self.in_features + i] = s
+                grad_input = PurePythonTensor(grad_input_data, (batch_size, self.in_features))
+        
+        return grad_input
+    
+    def zero_grad(self):
+        self.weight_grad = tensor_zeros((self.in_features, self.out_features))
+        self.bias_grad = tensor_zeros(self.out_features)
+
+
+class ReLU:
+    """ReLU activation."""
+    
+    def __init__(self):
+        self.mask = None
+    
+    def forward(self, x):
+        if NUMPY_AVAILABLE:
+            self.mask = (x.data > 0).astype(np.float32)
+            return PurePythonTensor(np.maximum(0, x.data))
+        else:
+            self.mask = [1.0 if v > 0 else 0.0 for v in x.data]
+            result = [max(0, v) for v in x.data]
+            return PurePythonTensor(result, x.shape)
+    
+    def backward(self, grad_output):
+        if NUMPY_AVAILABLE:
+            return PurePythonTensor(grad_output.data * self.mask)
+        else:
+            result = [grad_output.data[i] * self.mask[i] for i in range(len(grad_output.data))]
+            return PurePythonTensor(result, grad_output.shape)
+
+
+class Sigmoid:
+    """Sigmoid activation."""
+    
+    def __init__(self):
+        self.output = None
+    
+    def forward(self, x):
+        if NUMPY_AVAILABLE:
+            # Clip for numerical stability
+            clipped = np.clip(x.data, -500, 500)
+            self.output = 1.0 / (1.0 + np.exp(-clipped))
+            return PurePythonTensor(self.output)
+        else:
+            result = []
+            for v in x.data:
+                v = max(-500, min(500, v))  # Clip
+                result.append(1.0 / (1.0 + math.exp(-v)))
+            self.output = result
+            return PurePythonTensor(result, x.shape)
+    
+    def backward(self, grad_output):
+        # sigmoid' = sigmoid * (1 - sigmoid)
+        if NUMPY_AVAILABLE:
+            grad = self.output * (1 - self.output)
+            return PurePythonTensor(grad_output.data * grad)
+        else:
+            grad = [self.output[i] * (1 - self.output[i]) for i in range(len(self.output))]
+            result = [grad_output.data[i] * grad[i] for i in range(len(grad))]
+            return PurePythonTensor(result, grad_output.shape)
+
+
+class Dropout:
+    """Dropout layer."""
+    
+    def __init__(self, p=0.2):
+        self.p = p
+        self.mask = None
+        self.training = True
+    
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+        
+        if NUMPY_AVAILABLE:
+            self.mask = (np.random.rand(*x.shape) > self.p).astype(np.float32)
+            scale = 1.0 / (1.0 - self.p)
+            return PurePythonTensor(x.data * self.mask * scale)
+        else:
+            self.mask = [1.0 if random.random() > self.p else 0.0 for _ in x.data]
+            scale = 1.0 / (1.0 - self.p)
+            result = [x.data[i] * self.mask[i] * scale for i in range(len(x.data))]
+            return PurePythonTensor(result, x.shape)
+    
+    def backward(self, grad_output):
+        if not self.training or self.p == 0:
+            return grad_output
+        
+        scale = 1.0 / (1.0 - self.p)
+        if NUMPY_AVAILABLE:
+            return PurePythonTensor(grad_output.data * self.mask * scale)
+        else:
+            result = [grad_output.data[i] * self.mask[i] * scale for i in range(len(grad_output.data))]
+            return PurePythonTensor(result, grad_output.shape)
+
+
+class AdamOptimizer:
+    """Adam optimizer."""
+    
+    def __init__(self, layers, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
+        self.layers = [l for l in layers if isinstance(l, LinearLayer)]
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.t = 0
+        
+        # Initialize moment estimates
+        self.m_w = []
+        self.v_w = []
+        self.m_b = []
+        self.v_b = []
+        
+        for layer in self.layers:
+            self.m_w.append(tensor_zeros(layer.weight.shape))
+            self.v_w.append(tensor_zeros(layer.weight.shape))
+            self.m_b.append(tensor_zeros(layer.bias.shape))
+            self.v_b.append(tensor_zeros(layer.bias.shape))
+    
+    def step(self):
+        self.t += 1
+        
+        for i, layer in enumerate(self.layers):
+            # Update weights
+            self._update_param(
+                layer.weight, layer.weight_grad,
+                self.m_w[i], self.v_w[i]
+            )
+            
+            # Update biases
+            self._update_param(
+                layer.bias, layer.bias_grad,
+                self.m_b[i], self.v_b[i]
+            )
+    
+    def _update_param(self, param, grad, m, v):
+        if NUMPY_AVAILABLE:
+            # Update biased moments
+            m.data = self.beta1 * m.data + (1 - self.beta1) * grad.data
+            v.data = self.beta2 * v.data + (1 - self.beta2) * (grad.data ** 2)
+            
+            # Bias correction
+            m_hat = m.data / (1 - self.beta1 ** self.t)
+            v_hat = v.data / (1 - self.beta2 ** self.t)
+            
+            # Update parameters
+            param.data -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+        else:
+            for j in range(len(param.data)):
+                # Update biased moments
+                m.data[j] = self.beta1 * m.data[j] + (1 - self.beta1) * grad.data[j]
+                v.data[j] = self.beta2 * v.data[j] + (1 - self.beta2) * (grad.data[j] ** 2)
+                
+                # Bias correction
+                m_hat = m.data[j] / (1 - self.beta1 ** self.t)
+                v_hat = v.data[j] / (1 - self.beta2 ** self.t)
+                
+                # Update parameters
+                param.data[j] -= self.lr * m_hat / (math.sqrt(v_hat) + self.eps)
+    
+    def zero_grad(self):
+        for layer in self.layers:
+            layer.zero_grad()
+
+
+class WordPriorityNetwork:
+    """Neural network for word priority prediction."""
+    
+    def __init__(self, input_dim=41):
+        self.input_dim = input_dim
+        
+        # Build layers: 41 -> 64 -> 32 -> 16 -> 1
+        self.fc1 = LinearLayer(input_dim, 64)
+        self.relu1 = ReLU()
+        self.drop1 = Dropout(0.2)
+        
+        self.fc2 = LinearLayer(64, 32)
+        self.relu2 = ReLU()
+        self.drop2 = Dropout(0.2)
+        
+        self.fc3 = LinearLayer(32, 16)
+        self.relu3 = ReLU()
+        
+        self.fc4 = LinearLayer(16, 1)
+        self.sigmoid = Sigmoid()
+        
+        self.layers = [
+            self.fc1, self.relu1, self.drop1,
+            self.fc2, self.relu2, self.drop2,
+            self.fc3, self.relu3,
+            self.fc4, self.sigmoid
+        ]
+        
+        self.training_count = 0
+        self.total_loss = 0.0
+    
+    def forward(self, x):
+        """Forward pass through the network."""
+        out = x
+        for layer in self.layers:
+            out = layer.forward(out)
+        return out
+    
+    def backward(self, grad):
+        """Backward pass through the network."""
+        for layer in reversed(self.layers):
+            if hasattr(layer, 'backward'):
+                grad = layer.backward(grad)
+        return grad
+    
+    def train_mode(self):
+        for layer in self.layers:
+            if isinstance(layer, Dropout):
+                layer.training = True
+    
+    def eval_mode(self):
+        for layer in self.layers:
+            if isinstance(layer, Dropout):
+                layer.training = False
+    
+    def get_state(self):
+        """Get model state for saving."""
+        state = {
+            'training_count': self.training_count,
+            'total_loss': self.total_loss,
+            'layers': []
+        }
+        
+        for layer in self.layers:
+            if isinstance(layer, LinearLayer):
+                state['layers'].append({
+                    'weight': layer.weight.tolist(),
+                    'bias': layer.bias.tolist()
+                })
+        
+        return state
+    
+    def load_state(self, state):
+        """Load model state."""
+        self.training_count = state.get('training_count', 0)
+        self.total_loss = state.get('total_loss', 0.0)
+        
+        layer_states = state.get('layers', [])
+        linear_layers = [l for l in self.layers if isinstance(l, LinearLayer)]
+        
+        for layer, layer_state in zip(linear_layers, layer_states):
+            layer.weight = PurePythonTensor(layer_state['weight'])
+            layer.bias = PurePythonTensor(layer_state['bias'])
 
 
 # =============================================================================
@@ -335,32 +865,6 @@ class WordFeatureExtractor:
 
 
 # =============================================================================
-# NEURAL NETWORK
-# =============================================================================
-if TORCH_AVAILABLE:
-    class WordPriorityNetwork(nn.Module):
-        def __init__(self, input_dim=41):
-            super().__init__()
-            self.network = nn.Sequential(
-                nn.Linear(input_dim, 64),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(64, 32),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(32, 16),
-                nn.ReLU(),
-                nn.Linear(16, 1),
-                nn.Sigmoid()
-            )
-            self.training_count = 0
-            self.total_loss = 0.0
-        
-        def forward(self, x):
-            return self.network(x)
-
-
-# =============================================================================
 # SMART DECK SELECTOR
 # =============================================================================
 class SmartDeckSelector:
@@ -369,7 +873,6 @@ class SmartDeckSelector:
     def __init__(self, model_path=None):
         self.model = None
         self.optimizer = None
-        self.criterion = None
         self.loss_history = []
         self.prediction_log = []
         
@@ -377,31 +880,31 @@ class SmartDeckSelector:
         self.batch_x = []
         self.batch_y = []
         
-        if TORCH_AVAILABLE:
-            self.model = WordPriorityNetwork(input_dim=WordFeatureExtractor.dim())
-            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-            self.criterion = nn.MSELoss()
-            
-            if model_path and os.path.exists(model_path):
-                try:
-                    checkpoint = torch.load(model_path, weights_only=False)
-                    self.model.load_state_dict(checkpoint['model_state'])
-                    self.model.training_count = checkpoint.get('training_count', 0)
-                    self.model.total_loss = checkpoint.get('total_loss', 0.0)
-                    self.loss_history = checkpoint.get('loss_history', [])
-                    print(f"[OK] Loaded model: {self.model.training_count} training samples")
-                except Exception as e:
-                    print(f"[!!] Could not load model: {e}")
+        self.model = WordPriorityNetwork(input_dim=WordFeatureExtractor.dim())
+        self.optimizer = AdamOptimizer(self.model.layers, lr=0.001)
+        
+        if model_path and os.path.exists(model_path):
+            try:
+                with open(model_path, 'r', encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.model.load_state(checkpoint)
+                self.loss_history = checkpoint.get('loss_history', [])
+                print(f"[OK] Loaded model: {self.model.training_count} training samples")
+            except Exception as e:
+                print(f"[!!] Could not load model: {e}")
     
     def save_model(self, model_path):
-        if TORCH_AVAILABLE and self.model:
+        if self.model:
             try:
-                torch.save({
-                    'model_state': self.model.state_dict(),
-                    'training_count': self.model.training_count,
-                    'total_loss': self.model.total_loss,
-                    'loss_history': self.loss_history[-500:]
-                }, model_path)
+                state = self.model.get_state()
+                state['loss_history'] = self.loss_history[-500:]
+                
+                # Change extension to .json for pure Python version
+                if model_path.endswith('.pth'):
+                    model_path = model_path[:-4] + '.json'
+                
+                with open(model_path, 'w', encoding='utf-8') as f:
+                    json.dump(state, f)
             except Exception as e:
                 print(f"[!!] Could not save model: {e}")
     
@@ -419,7 +922,7 @@ class SmartDeckSelector:
         return times_seen, days_since, history[-5:] if history else []
     
     def compute_priority(self, entry, word_data, lang):
-        if not TORCH_AVAILABLE or not self.model:
+        if not self.model:
             score = word_data.get('score', 0)
             return (5 - score) / 10.0
         
@@ -433,10 +936,14 @@ class SmartDeckSelector:
             score, lang, times_seen, days_since, recent_history
         )
         
-        self.model.eval()
-        with torch.no_grad():
-            x = torch.tensor([features], dtype=torch.float32)
-            priority = self.model(x).item()
+        self.model.eval_mode()
+        x = PurePythonTensor(features)
+        output = self.model.forward(x)
+        
+        if NUMPY_AVAILABLE:
+            priority = float(output.data[0]) if len(output.shape) > 0 else float(output.data)
+        else:
+            priority = output.data[0] if isinstance(output.data, list) else output.data
         
         # Blend with simple heuristic (helps when model is new)
         score_priority = (5 - score) / 10.0
@@ -445,7 +952,7 @@ class SmartDeckSelector:
         return 0.6 * priority + 0.2 * score_priority + 0.2 * spacing_boost
     
     def train_step(self, entry, word_data, was_correct, lang):
-        if not TORCH_AVAILABLE or not self.model:
+        if not self.model:
             return None
         
         score = word_data.get('score', 0)
@@ -462,25 +969,45 @@ class SmartDeckSelector:
         
         # Accumulate for mini-batch
         self.batch_x.append(features)
-        self.batch_y.append([target])
+        self.batch_y.append(target)
         
         loss_val = None
         pred_val = None
         
         # Train when batch is full
         if len(self.batch_x) >= self.BATCH_SIZE:
-            x = torch.tensor(self.batch_x, dtype=torch.float32)
-            y = torch.tensor(self.batch_y, dtype=torch.float32)
-            
-            self.model.train()
+            self.model.train_mode()
             self.optimizer.zero_grad()
-            predictions = self.model(x)
-            loss = self.criterion(predictions, y)
-            loss.backward()
-            self.optimizer.step()
             
-            loss_val = loss.item()
-            pred_val = predictions[-1].item()  # last prediction
+            total_loss = 0.0
+            
+            # Process each sample (simple SGD-style for stability)
+            for i in range(len(self.batch_x)):
+                x = PurePythonTensor(self.batch_x[i])
+                y_target = self.batch_y[i]
+                
+                # Forward
+                output = self.model.forward(x)
+                if NUMPY_AVAILABLE:
+                    pred = float(output.data[0]) if len(output.shape) > 0 else float(output.data)
+                else:
+                    pred = output.data[0] if isinstance(output.data, list) else output.data
+                
+                # MSE loss
+                error = pred - y_target
+                loss = error ** 2
+                total_loss += loss
+                
+                # Backward (gradient of MSE: 2 * (pred - target))
+                grad = PurePythonTensor([2 * error])
+                self.model.backward(grad)
+            
+            # Average loss
+            loss_val = total_loss / len(self.batch_x)
+            pred_val = pred  # Last prediction
+            
+            # Optimizer step
+            self.optimizer.step()
             
             self.model.training_count += len(self.batch_x)
             self.model.total_loss += loss_val * len(self.batch_x)
@@ -535,7 +1062,7 @@ class SmartDeckSelector:
             return
         
         print("\n" + "="*70)
-        print("NEURAL NETWORK LOG")
+        print("NEURAL NETWORK LOG (Pure Python)")
         print("="*70)
         
         n = self.model.training_count
@@ -571,12 +1098,12 @@ class SmartDeckSelector:
 class Parolino(toga.App):
     def startup(self):
         print("\n" + "="*50)
-        print("PAROLINO STARTUP")
+        print("PAROLINO STARTUP (Pure Python DL)")
         print("="*50)
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.deck_save_path = os.path.join(script_dir, 'deck_save.json')
-        self.model_save_path = os.path.join(script_dir, 'word_model.pth')
+        self.model_save_path = os.path.join(script_dir, 'word_model.json')  # Changed to .json
         
         # Load dictionaries
         self.dict_it = []
@@ -1098,8 +1625,10 @@ class Parolino(toga.App):
             return
         
         lines = []
+        lines.append("Pure Python Neural Net")
+        lines.append("")
         
-        if TORCH_AVAILABLE and self.selector.model:
+        if self.selector.model:
             n = self.selector.model.training_count
             avg = self.selector.model.total_loss / max(1, n)
             
@@ -1143,7 +1672,7 @@ class Parolino(toga.App):
                 if count > 0:
                     lines.append(f"  {score:+d}: {count}")
         else:
-            lines.append("PyTorch not available")
+            lines.append("No model")
         
         self.stats_text.value = "\n".join(lines)
     
